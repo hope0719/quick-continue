@@ -176,43 +176,41 @@ func performUpdate(version: String) {
 
 // ─── Floating button window ──────────────────────────────────────
 
-// NSButton subclass: supports left-click action, drag-to-move, and right-click menu
-class MenuButton: NSButton {
+// Custom view: handles left-click action, drag-to-move, and right-click menu
+// Using NSView instead of NSButton because NSButton's internal tracking
+// loop prevents mouseDragged from being called.
+class ClickableDraggableView: NSView {
+    var onClickAction: (() -> Void)?
     var contextMenu: NSMenu?
     private var _didDrag = false
-    private var _trackingMouse = false
+    private var _dragStart: NSPoint = .zero
 
     override func mouseDown(with event: NSEvent) {
         _didDrag = false
-        _trackingMouse = true
-        super.mouseDown(with: event)
+        _dragStart = event.locationInWindow
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if _trackingMouse {
-            let dx = event.deltaX
-            let dy = event.deltaY
-            if abs(dx) > 3 || abs(dy) > 3 {
-                _didDrag = true
-                if let panel = window as? NSPanel {
-                    var origin = panel.frame.origin
-                    origin.x += dx
-                    origin.y += dy
-                    panel.setFrameOrigin(origin)
-                }
+        let current = event.locationInWindow
+        let dx = current.x - _dragStart.x
+        let dy = current.y - _dragStart.y
+        if abs(dx) > 3 || abs(dy) > 3 {
+            _didDrag = true
+            if let panel = window as? NSPanel {
+                // Convert window-relative delta to screen delta
+                var origin = panel.frame.origin
+                origin.x += dx
+                origin.y += dy
+                panel.setFrameOrigin(origin)
             }
+            _dragStart = current
         }
-        super.mouseDragged(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
-        _trackingMouse = false
-        super.mouseUp(with: event)
-    }
-
-    override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
-        if _didDrag { return false }
-        return super.sendAction(action, to: target)
+        if !_didDrag {
+            onClickAction?()
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -224,7 +222,7 @@ class MenuButton: NSButton {
 
 class FloatingButton {
     var window: NSPanel!
-    var button: MenuButton!
+    var button: ClickableDraggableView!
     var contextMenu: NSMenu!
 
     init() {
@@ -242,27 +240,34 @@ class FloatingButton {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = false
 
-        // Rounded background view
-        let bgView = NSView(frame: window.contentView!.bounds)
-        bgView.wantsLayer = true
-        bgView.layer?.backgroundColor = NSColor.systemBlue.cgColor
-        bgView.layer?.cornerRadius = 18
-        bgView.autoresizingMask = [.width, .height]
-        window.contentView!.addSubview(bgView)
-
-        // Button (MenuButton subclass handles right-click)
-        button = MenuButton(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
-        button.title = "▶ 继续"
-        button.bezelStyle = .inline
-        button.isBordered = false
-        button.font = NSFont.boldSystemFont(ofSize: 12)
-        button.contentTintColor = .white
-        button.target = self
-        button.action = #selector(onClick)
+        // Clickable/draggable button view (replaces NSButton)
+        button = ClickableDraggableView(frame: window.contentView!.bounds)
+        button.wantsLayer = true
+        button.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        button.layer?.cornerRadius = 18
         button.autoresizingMask = [.width, .height]
         window.contentView!.addSubview(button)
 
-        // Right-click context menu (handled by MenuButton.rightMouseDown)
+        // Text label on the button
+        let label = NSTextField(labelWithString: "▶ 继续")
+        label.font = NSFont.boldSystemFont(ofSize: 12)
+        label.textColor = .white
+        label.alignment = .center
+        label.frame = button.bounds
+        label.autoresizingMask = [.width, .height]
+        // Make label transparent to mouse events
+        label.isEditable = false
+        label.isSelectable = false
+        label.isBordered = false
+        label.backgroundColor = .clear
+        button.addSubview(label)
+
+        // Click handler
+        button.onClickAction = { [weak self] in
+            self?.onClick()
+        }
+
+        // Right-click context menu
         contextMenu = NSMenu(title: "Quick Continue")
         let hideItem = NSMenuItem(title: "隐藏", action: #selector(onHide), keyEquivalent: "")
         hideItem.target = self
@@ -281,10 +286,9 @@ class FloatingButton {
     @objc func onClick() {
         logTrigger("Button click")
         // Flash green feedback
-        let bgView = window.contentView!.subviews[0]
-        bgView.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        button.layer?.backgroundColor = NSColor.systemGreen.cgColor
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            bgView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+            self.button.layer?.backgroundColor = NSColor.systemBlue.cgColor
         }
     }
 
