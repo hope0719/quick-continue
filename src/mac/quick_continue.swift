@@ -1,10 +1,10 @@
-// quick_continue.swift — Native macOS global hotkey + menu bar button
+// quick_continue.swift — Native macOS global hotkey + floating button
 // Uses CGEventTap for hotkey detection (works in CLI tools)
 // Uses osascript for keyboard simulation
 //
 // Compile:  swiftc -O -framework CoreGraphics -framework AppKit -o quick_continue quick_continue.swift
 // Run:      ./quick_continue            # Hotkey only (Cmd+Shift+J)
-//           ./quick_continue --button   # Hotkey + menu bar icon (click to trigger)
+//           ./quick_continue --button   # Hotkey + floating click button
 // Requires: Accessibility permission (System Settings → Privacy → Accessibility)
 
 import CoreGraphics
@@ -65,47 +65,79 @@ func logTrigger(_ source: String) {
     simulateInput()
 }
 
-// ─── Menu bar icon (always shown) ────────────────────────────────
+// ─── Floating button window ──────────────────────────────────────
 
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+class FloatingButton {
+    var window: NSPanel!
+    var button: NSButton!
+    var isDragging = false
+    var dragStart: NSPoint = .zero
+    var windowStart: NSPoint = .zero
 
-let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-statusItem.button?.title = "▶"
-statusItem.button?.toolTip = "Quick Continue — click to type '\(TEXT)'"
+    init() {
+        // Create borderless, floating panel
+        window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 70, height: 36),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        window.level = .floating           // Always on top
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isMovableByWindowBackground = false
 
-if useButton {
-    statusItem.button?.action = #selector(StatusButtonHandler.onClick)
-    statusItem.button?.target = StatusButtonHandler.shared
-    statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-} else {
-    // Hotkey-only mode: show menu with just Quit
-    let menu = NSMenu()
-    menu.addItem(withTitle: "Quick Continue — Hotkey ⌘+Shift+J", action: nil, keyEquivalent: "")
-    menu.addItem(NSMenuItem.separator())
-    menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-    statusItem.menu = menu
-}
+        // Rounded background view
+        let bgView = NSView(frame: window.contentView!.bounds)
+        bgView.wantsLayer = true
+        bgView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        bgView.layer?.cornerRadius = 18
+        bgView.autoresizingMask = [.width, .height]
+        window.contentView!.addSubview(bgView)
 
-class StatusButtonHandler: NSObject {
-    static let shared = StatusButtonHandler()
-    @objc func onClick() {
-        let event = NSApp.currentEvent!
-        if event.type == .rightMouseUp {
-            // Right-click: show menu
-            let menu = NSMenu()
-            menu.addItem(withTitle: "Quick Continue", action: nil, keyEquivalent: "")
-            menu.addItem(NSMenuItem.separator())
-            menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil
-        } else {
-            // Left-click: trigger
-            logTrigger("MenuBar click")
+        // Button
+        button = NSButton(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
+        button.title = "▶ 继续"
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.font = NSFont.boldSystemFont(ofSize: 12)
+        button.contentTintColor = .white
+        button.target = self
+        button.action = #selector(onClick)
+        button.autoresizingMask = [.width, .height]
+        window.contentView!.addSubview(button)
+
+        // Position: bottom-right of main screen
+        if let screen = NSScreen.main {
+            let screenFrame = screen.visibleFrame
+            let x = screenFrame.maxX - 90
+            let y = screenFrame.minY + 60
+            window.setFrameOrigin(NSPoint(x: x, y: y))
         }
     }
+
+    @objc func onClick() {
+        logTrigger("Button click")
+        // Flash green feedback
+        let bgView = window.contentView!.subviews[0]
+        bgView.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            bgView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        }
+    }
+
+    func show() {
+        window.orderFrontRegardless()
+    }
+
+    func close() {
+        window.close()
+    }
 }
+
+var floatingBtn: FloatingButton?
 
 // ─── CGEventTap callback (hotkey) ────────────────────────────────
 
@@ -129,13 +161,23 @@ print("  Quick Continue (native macOS)")
 print("================================================")
 print("  Hotkey : ⌘+Shift+J")
 if useButton {
-    print("  Button : Menu bar icon (click ▶)")
+    print("  Button : Floating button (bottom-right)")
 }
 print("  Text   : '\(TEXT)' + Enter")
 print("------------------------------------------------")
 print("  Clipboard: auto save & restore")
 print("================================================")
 fflush(stdout)
+
+// Setup NSApplication (needed for floating window)
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
+// Create floating button if requested
+if useButton {
+    floatingBtn = FloatingButton()
+    floatingBtn?.show()
+}
 
 // Create CGEventTap for keyboard events
 let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue
@@ -161,14 +203,14 @@ CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
 CGEvent.tapEnable(tap: tap, enable: true)
 
 print("  Ready.")
-if !useButton {
-    print("  Press ⌘+Shift+J to trigger.")
+if useButton {
+    print("  Press ⌘+Shift+J or click the floating ▶ button.")
 } else {
-    print("  Press ⌘+Shift+J or click ▶ in menu bar.")
+    print("  Press ⌘+Shift+J to trigger.")
 }
 print("  Ctrl+C to quit.")
 print("================================================")
 fflush(stdout)
 
-// Run app event loop (handles both menu bar and CGEventTap)
+// Run app event loop
 app.run()
