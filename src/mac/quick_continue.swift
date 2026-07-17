@@ -68,9 +68,20 @@ func logTrigger(_ source: String) {
 
 // ─── Floating button window ──────────────────────────────────────
 
+// NSButton subclass that handles right-click for context menu
+class MenuButton: NSButton {
+    var contextMenu: NSMenu?
+
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu = contextMenu {
+            menu.popUp(positioning: nil, at: NSPoint(x: bounds.midX, y: bounds.midY), in: self)
+        }
+    }
+}
+
 class FloatingButton {
     var window: NSPanel!
-    var button: NSButton!
+    var button: MenuButton!
     var isDragging = false
     var dragStart: NSPoint = .zero
     var windowStart: NSPoint = .zero
@@ -99,8 +110,8 @@ class FloatingButton {
         bgView.autoresizingMask = [.width, .height]
         window.contentView!.addSubview(bgView)
 
-        // Button
-        button = NSButton(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
+        // Button (MenuButton subclass handles right-click)
+        button = MenuButton(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
         button.title = "▶ 继续"
         button.bezelStyle = .inline
         button.isBordered = false
@@ -111,7 +122,7 @@ class FloatingButton {
         button.autoresizingMask = [.width, .height]
         window.contentView!.addSubview(button)
 
-        // Right-click context menu
+        // Right-click context menu (handled by MenuButton.rightMouseDown)
         contextMenu = NSMenu(title: "Quick Continue")
         let hideItem = NSMenuItem(title: "隐藏", action: #selector(onHide), keyEquivalent: "")
         hideItem.target = self
@@ -119,11 +130,7 @@ class FloatingButton {
         let quitItem = NSMenuItem(title: "退出", action: #selector(onQuit), keyEquivalent: "")
         quitItem.target = self
         contextMenu.addItem(quitItem)
-
-        // Add right-click handler
-        let rightClickGesture = NSClickGestureRecognizer(target: self, action: #selector(onRightClick(_:)))
-        rightClickGesture.buttonMask = 0x2  // Right mouse button
-        window.contentView!.addGestureRecognizer(rightClickGesture)
+        button.contextMenu = contextMenu
 
         // Position: bottom-right of main screen
         if let screen = NSScreen.main {
@@ -142,11 +149,6 @@ class FloatingButton {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             bgView.layer?.backgroundColor = NSColor.systemBlue.cgColor
         }
-    }
-
-    @objc func onRightClick(_ sender: NSClickGestureRecognizer) {
-        let event = sender.location(in: window.contentView)
-        contextMenu.popUp(positioning: nil, at: event, in: window.contentView)
     }
 
     @objc func onHide() {
