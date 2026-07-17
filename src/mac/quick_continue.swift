@@ -16,6 +16,8 @@ let KVK_ANSI_J: UInt32 = 0x26  // J key
 let KVK_ANSI_B: UInt32 = 0x0B  // B key
 
 let useButton = CommandLine.arguments.contains("--button")
+let CURRENT_VERSION = "1.1.0"
+let REPO = "hope0719/workbuddy-quick-continue"
 
 // ─── Simulate input: save clipboard → paste → enter → restore ────
 
@@ -64,6 +66,112 @@ func logTrigger(_ source: String) {
     print("[\(ts)] \(source) → typing '\(TEXT)' + Enter")
     fflush(stdout)
     simulateInput()
+}
+
+// ─── Auto-update ─────────────────────────────────────────────────
+
+func getExecutablePath() -> String {
+    let buf = UnsafeMutablePointer<CChar>.allocate(capacity: Int(PATH_MAX))
+    defer { buf.deallocate() }
+    var size: UInt32 = UInt32(PATH_MAX)
+    if _NSGetExecutablePath(buf, &size) == 0 {
+        return String(cString: buf)
+    }
+    return ""
+}
+
+func checkForUpdate() {
+    DispatchQueue.global(qos: .background).async {
+        let url = "https://raw.githubusercontent.com/\(REPO)/main/VERSION"
+        guard let data = try? Data(contentsOf: URL(string: url)!, options: .alwaysMapped),
+              let remoteVersion = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !remoteVersion.isEmpty else { return }
+
+        guard remoteVersion != CURRENT_VERSION else { return }
+
+        print("[AutoUpdate] New version: \(remoteVersion) (current: \(CURRENT_VERSION))")
+        fflush(stdout)
+        performUpdate(version: remoteVersion)
+    }
+}
+
+func performUpdate(version: String) {
+    let exePath = getExecutablePath()
+    guard !exePath.isEmpty else {
+        print("[AutoUpdate] Cannot determine executable path, skipping")
+        fflush(stdout)
+        return
+    }
+
+    let sourceURL = "https://raw.githubusercontent.com/\(REPO)/main/src/mac/quick_continue.swift"
+    let tmpSource = "/tmp/quick_continue_update_\(version).swift"
+    let tmpBinary = "/tmp/quick_continue_update_\(version)"
+
+    // 1) Download source
+    let dl = Process()
+    dl.launchPath = "/usr/bin/curl"
+    dl.arguments = ["-fsSL", sourceURL, "-o", tmpSource]
+    dl.launch()
+    dl.waitUntilExit()
+    guard dl.terminationStatus == 0 else {
+        print("[AutoUpdate] Download failed")
+        fflush(stdout)
+        return
+    }
+
+    // 2) Compile
+    let comp = Process()
+    comp.launchPath = "/usr/bin/swiftc"
+    comp.arguments = ["-O", "-framework", "CoreGraphics", "-framework", "AppKit",
+                      "-o", tmpBinary, tmpSource]
+    comp.launch()
+    comp.waitUntilExit()
+    try? FileManager.default.removeItem(atPath: tmpSource)
+    guard comp.terminationStatus == 0 else {
+        print("[AutoUpdate] Compilation failed")
+        fflush(stdout)
+        return
+    }
+
+    // 3) Show notification
+    let notify = Process()
+    notify.launchPath = "/usr/bin/osascript"
+    notify.arguments = ["-e",
+        "display notification \"正在更新到 v\(version)，即将自动重启...\" with title \"Quick Continue\""]
+    notify.launch()
+    notify.waitUntilExit()
+
+    // 4) Build restart command
+    let args = CommandLine.arguments.dropFirst()
+        .map { "'\($0)'" }
+        .joined(separator: " ")
+    let restartCmd = args.isEmpty ? exePath : "\(exePath) \(args)"
+
+    // 5) Background script: wait → replace → restart
+    let script = """
+    sleep 2
+    cp '\(tmpBinary)' '\(exePath)'
+    rm -f '\(tmpBinary)'
+    sleep 0.5
+    \(restartCmd) &
+    """
+    let tmpScript = "/tmp/quick_continue_restart.sh"
+    try? script.write(toFile: tmpScript, atomically: true, encoding: .utf8)
+
+    let sh = Process()
+    sh.launchPath = "/bin/bash"
+    sh.arguments = [tmpScript]
+    sh.launch()
+    try? FileManager.default.removeItem(atPath: tmpScript)
+
+    print("[AutoUpdate] Updating to v\(version)...")
+    fflush(stdout)
+
+    // 6) Exit current process so script can replace binary
+    DispatchQueue.main.async {
+        NSApp.terminate(nil)
+    }
 }
 
 // ─── Floating button window ──────────────────────────────────────
@@ -199,7 +307,7 @@ var tapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
 // ─── Main ────────────────────────────────────────────────────────
 
 print("================================================")
-print("  Quick Continue (native macOS)")
+print("  Quick Continue v\(CURRENT_VERSION) (native macOS)")
 print("================================================")
 print("  Hotkey : ⌘+Shift+J")
 if useButton {
@@ -222,6 +330,9 @@ if useButton {
     floatingBtn = FloatingButton()
     floatingBtn?.show()
 }
+
+// Check for updates (async, non-blocking)
+checkForUpdate()
 
 // Create CGEventTap for keyboard events
 let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue

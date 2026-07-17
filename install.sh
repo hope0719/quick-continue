@@ -24,6 +24,7 @@ BINARY="$APP_DIR/quick_continue"
 PLIST_NAME="com.quickcontinue.daemon"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 SOURCE_URL="${BASE_URL}/src/mac/quick_continue.swift"
+VERSION_URL="${BASE_URL}/VERSION"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -85,6 +86,13 @@ if curl -fsSL "$SOURCE_URL" -o "$TMP_SOURCE"; then
 else
     rm -f "$TMP_SOURCE"
     error "Failed to download source from $SOURCE_URL"
+fi
+
+# 5b) Download VERSION
+curl -fsSL "$VERSION_URL" -o "$APP_DIR/VERSION" 2>/dev/null || true
+INSTALLED_VERSION=$(cat "$APP_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$INSTALLED_VERSION" ]; then
+    info "Version: v${INSTALLED_VERSION}"
 fi
 
 # 6) Compile
