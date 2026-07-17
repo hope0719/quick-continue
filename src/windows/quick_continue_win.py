@@ -15,9 +15,79 @@ import ctypes.wintypes
 import time
 import argparse
 import sys
+import os
+import urllib.request
+import subprocess
+import threading
 
 # ─── Configuration ───────────────────────────────────────────────
 TEXT = "继续"
+CURRENT_VERSION = "1.1.0"
+REPO = "hope0719/quick-continue"
+
+# ─── Auto-update ─────────────────────────────────────────────────
+
+def check_for_update():
+    """Check GitHub for newer version and auto-update if available."""
+    try:
+        version_url = f"https://raw.githubusercontent.com/{REPO}/main/VERSION"
+        req = urllib.request.Request(version_url, headers={'User-Agent': 'QuickContinue/1.0'})
+        resp = urllib.request.urlopen(req, timeout=5)
+        remote_version = resp.read().decode('utf-8').strip()
+        if not remote_version or remote_version == CURRENT_VERSION:
+            return
+        print(f"[AutoUpdate] New version found: {remote_version} (current: {CURRENT_VERSION})")
+        _perform_update(remote_version)
+    except Exception as e:
+        print(f"[AutoUpdate] Check failed: {e}")
+
+def _perform_update(remote_version):
+    """Download new version, replace self, and restart."""
+    exe_path = sys.executable
+    script_path = os.path.abspath(__file__)
+    source_url = f"https://raw.githubusercontent.com/{REPO}/main/src/windows/quick_continue_win.py"
+    tmp_script = os.path.join(os.environ.get("TEMP", "."), f"quick_continue_{remote_version}.py")
+    tmp_bat = os.path.join(os.environ.get("TEMP", "."), f"qc_update_{remote_version}.bat")
+
+    # Download new script
+    try:
+        req = urllib.request.Request(source_url, headers={'User-Agent': 'QuickContinue/1.0'})
+        resp = urllib.request.urlopen(req, timeout=15)
+        content = resp.read()
+        with open(tmp_script, 'wb') as f:
+            f.write(content)
+    except Exception as e:
+        print(f"[AutoUpdate] Download failed: {e}")
+        return
+
+    # Build arguments for restart
+    args = [exe_path, '"' + script_path + '"'] + sys.argv[1:]
+    restart_cmd = " ".join(args)
+
+    # Create batch script: wait → kill → copy → restart
+    bat_content = f'''@echo off
+timeout /t 2 /nobreak >nul
+taskkill /F /FI "WINDOWTITLE eq Quick Continue*" /T >nul 2>&1
+timeout /t 1 /nobreak >nul
+copy /Y "{tmp_script}" "{script_path}" >nul 2>&1
+del /F "{tmp_script}" >nul 2>&1
+start "" {restart_cmd}
+del /F "%~f0" >nul 2>&1
+'''
+    try:
+        with open(tmp_bat, 'w', encoding='gbk') as f:
+            f.write(bat_content)
+        subprocess.Popen(['cmd', '/c', 'start', '', tmp_bat], 
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW)
+        print(f"[AutoUpdate] Updating to v{remote_version}... restarting.")
+        time.sleep(0.5)
+        sys.exit(0)
+    except Exception as e:
+        print(f"[AutoUpdate] Update failed: {e}")
+        try:
+            os.remove(tmp_script)
+        except:
+            pass
 
 # ─── Win32 constants ─────────────────────────────────────────────
 CF_UNICODETEXT = 13
@@ -244,7 +314,7 @@ def run_with_button():
     hotkey_ok = user32.RegisterHotKey(None, HOTKEY_ID, MOD_ALT, VK_J)
 
     print("=" * 48)
-    print("  Quick Continue (Windows)")
+    print(f"  Quick Continue v{CURRENT_VERSION} (Windows)")
     print("=" * 48)
     if hotkey_ok:
         print("  Hotkey : Alt+J")
@@ -280,7 +350,7 @@ def run_hotkey_only():
     user32 = ctypes.windll.user32
 
     print("=" * 48)
-    print("  Quick Continue (Windows)")
+    print(f"  Quick Continue v{CURRENT_VERSION} (Windows)")
     print("=" * 48)
     print(f"  Hotkey : Alt+J")
     print(f"  Text   : '{TEXT}' + Enter")
@@ -322,6 +392,9 @@ def main():
         time.sleep(2)
         do_continue("test")
         return
+
+    # Check for updates (non-blocking, runs in background)
+    threading.Thread(target=check_for_update, daemon=True).start()
 
     if args.button:
         run_with_button()
