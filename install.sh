@@ -1,18 +1,16 @@
 #!/bin/bash
 # Quick Continue - macOS one-line installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/hope0719/workbuddy-quick-continue/main/install.sh | bash
-#        curl -fsSL .../install.sh | bash -s -- --button   # With menu bar icon
+#        curl -fsSL .../install.sh | bash -s -- --button   # With floating button
 
 set -e
 
 # Parse arguments
 EXTRA_ARGS=""
-BUTTON_PLIST_ENTRY=""
 for arg in "$@"; do
     case $arg in
         --button)
             EXTRA_ARGS="--button"
-            BUTTON_PLIST_ENTRY="        <string>--button</string>"
             ;;
     esac
 done
@@ -25,6 +23,7 @@ APP_DIR="$HOME/Applications/QuickContinue"
 BINARY="$APP_DIR/quick_continue"
 PLIST_NAME="com.quickcontinue.daemon"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
+APP_BUNDLE="$APP_DIR/QuickContinue.app"
 SOURCE_URL="${BASE_URL}/src/mac/quick_continue.swift"
 
 RED='\033[0;31m'
@@ -65,11 +64,17 @@ if ! command -v swiftc &>/dev/null; then
 fi
 info "Swift compiler found: $(swiftc --version | head -1)"
 
-# 3) Stop existing service if running
-if launchctl list | grep -q "$PLIST_NAME" 2>/dev/null; then
-    warn "Stopping existing service..."
+# 3) Stop and remove existing services (both LaunchAgent and Login Items)
+if launchctl list 2>/dev/null | grep -q "$PLIST_NAME"; then
+    warn "Stopping existing LaunchAgent..."
     launchctl unload "$PLIST_PATH" 2>/dev/null || true
 fi
+if [ -f "$PLIST_PATH" ]; then
+    rm -f "$PLIST_PATH"
+fi
+# Remove old Login Items entry (best-effort via osascript)
+osascript -e 'tell application "System Events" to delete every login item whose name is "QuickContinue"' 2>/dev/null || true
+info "Cleaned up previous installation."
 
 # 4) Create install directory
 mkdir -p "$APP_DIR"
@@ -100,18 +105,56 @@ fi
 rm -f "$TMP_SOURCE"
 chmod +x "$BINARY"
 
-# 7) Create LaunchAgent plist
-mkdir -p "$HOME/Library/LaunchAgents"
+# 7) Configure startup method based on mode
+if [ -n "$EXTRA_ARGS" ]; then
+    # ── Button mode: create .app bundle + Login Item ──
+    # LaunchAgent cannot show GUI (no GUI context in background mode).
+    # Instead, create a .app bundle and add it to Login Items.
 
-# Build ProgramArguments array
-if [ -n "$BUTTON_PLIST_ENTRY" ]; then
-    PROG_ARGS="        <string>${BINARY}</string>
-${BUTTON_PLIST_ENTRY}"
+    # Build .app bundle structure
+    mkdir -p "$APP_BUNDLE/Contents/MacOS"
+
+    # Create Info.plist
+    cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>launch.sh</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.quickcontinue.app</string>
+    <key>CFBundleName</key>
+    <string>QuickContinue</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+    # Create launcher script inside .app
+    cat > "$APP_BUNDLE/Contents/MacOS/launch.sh" <<LAUNCHER
+#!/bin/bash
+exec "$BINARY" --button
+LAUNCHER
+    chmod +x "$APP_BUNDLE/Contents/MacOS/launch.sh"
+
+    info "Created app bundle: $APP_BUNDLE"
+
+    # Add to Login Items (starts at login with full GUI context)
+    osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$APP_BUNDLE\", hidden:false}"
+    info "Added to Login Items (auto-start at login)."
+
+    # Start now
+    open "$APP_BUNDLE"
+    info "Service started."
 else
-    PROG_ARGS="        <string>${BINARY}</string>"
-fi
+    # ── Hotkey-only mode: use LaunchAgent (no GUI needed) ──
+    mkdir -p "$HOME/Library/LaunchAgents"
 
-cat > "$PLIST_PATH" <<PLIST
+    cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -120,7 +163,7 @@ cat > "$PLIST_PATH" <<PLIST
     <string>${PLIST_NAME}</string>
     <key>ProgramArguments</key>
     <array>
-${PROG_ARGS}
+        <string>${BINARY}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -133,13 +176,13 @@ ${PROG_ARGS}
 </dict>
 </plist>
 PLIST
-info "LaunchAgent configured."
+    info "LaunchAgent configured."
 
-# 8) Load service
-launchctl load "$PLIST_PATH"
-info "Service started."
+    launchctl load "$PLIST_PATH"
+    info "Service started."
+fi
 
-# 9) Done
+# 8) Done
 echo ""
 echo "=========================================="
 echo -e "  ${GREEN}Installation complete!${NC}"
@@ -147,23 +190,27 @@ echo "=========================================="
 echo ""
 echo "  Hotkey:  Cmd+Shift+J"
 if [ -n "$EXTRA_ARGS" ]; then
-    echo "  Button:  Menu bar icon (click ▶)"
+    echo "  Button:  Floating button (bottom-right)"
 fi
 echo "  Action:  Type '继续' + Enter"
 echo ""
-echo "  The service will start automatically on login."
+if [ -n "$EXTRA_ARGS" ]; then
+    echo "  Auto-start: Login Items (System Settings → General → Login Items)"
+else
+    echo "  Auto-start: Login (LaunchAgent)"
+fi
 echo ""
 echo "  Commands:"
-echo "    Stop:    launchctl unload ~/Library/LaunchAgents/${PLIST_NAME}.plist"
-echo "    Start:   launchctl load ~/Library/LaunchAgents/${PLIST_NAME}.plist"
-echo "    Logs:    cat ${APP_DIR}/stdout.log"
+if [ -n "$EXTRA_ARGS" ]; then
+    echo "    Stop:    osascript -e 'tell application \"QuickContinue\" to quit'"
+    echo "    Start:   open $APP_BUNDLE"
+else
+    echo "    Stop:    launchctl unload ~/Library/LaunchAgents/${PLIST_NAME}.plist"
+    echo "    Start:   launchctl load ~/Library/LaunchAgents/${PLIST_NAME}.plist"
+    echo "    Logs:    cat ${APP_DIR}/stdout.log"
+fi
 echo "    Uninstall: curl -fsSL ${BASE_URL}/uninstall.sh | bash"
 echo ""
-if [ -z "$EXTRA_ARGS" ]; then
-    echo "  Tip: Add menu bar icon button:"
-    echo "    curl -fsSL ${BASE_URL}/install.sh | bash -s -- --button"
-    echo ""
-fi
 warn "First time? Grant Accessibility permission:"
-echo "  System Settings → Privacy & Security → Accessibility → Add Terminal"
+echo "  System Settings → Privacy & Security → Accessibility"
 echo ""

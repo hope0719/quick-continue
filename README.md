@@ -4,7 +4,7 @@
 
 | 平台 | 快捷键 | 点击触发 | 原理 |
 |------|--------|----------|------|
-| macOS | `Cmd+Shift+J` | 菜单栏 `▶` 图标 | Swift 原生，CGEventTap + osascript |
+| macOS | `Cmd+Shift+J` | 悬浮小按钮 | Swift 原生，CGEventTap + osascript |
 | Windows | `Alt+J` | 悬浮小按钮 | Python + Win32 API (ctypes)，零依赖 |
 
 两个平台都会自动保存/恢复剪贴板，不会覆盖你已复制的内容。
@@ -18,6 +18,14 @@ curl -fsSL https://raw.githubusercontent.com/hope0719/workbuddy-quick-continue/m
 ```
 
 需要 Xcode Command Line Tools（首次运行会提示安装）。安装后自动配置开机启动。
+
+**需要悬浮按钮？** 加 `--button`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hope0719/workbuddy-quick-continue/main/install.sh | bash -s -- --button
+```
+
+悬浮按钮模式会创建 .app 并添加到「登录项」，开机自动启动（有 GUI 上下文，悬浮窗可正常显示）。
 
 **Windows（PowerShell 一行命令）：**
 
@@ -41,22 +49,16 @@ irm https://raw.githubusercontent.com/hope0719/workbuddy-quick-continue/main/uni
 
 默认只有快捷键。加 `--button` 启用点击触发：
 
-**macOS** — 菜单栏出现 `▶` 图标，点击即触发：
+**macOS** — 屏幕右下角出现悬浮小按钮，点击即触发（通过 .app bundle + 登录项启动）：
 
 ```bash
-# 手动运行
-./quick_continue --button
-
-# 安装为服务（带按钮）
-# 编辑 ~/Library/LaunchAgents/com.quickcontinue.daemon.plist
-# 在 ProgramArguments 中加入 <string>--button</string>
-# 然后 launchctl unload && launchctl load
+curl -fsSL https://raw.githubusercontent.com/hope0719/workbuddy-quick-continue/main/install.sh | bash -s -- --button
 ```
 
 **Windows** — 屏幕右下角出现悬浮小按钮，可拖动、可右键菜单：
 
 ```powershell
-python src/windows/quick_continue_win.py --button
+irm https://raw.githubusercontent.com/hope0719/workbuddy-quick-continue/main/install.ps1 | iex
 ```
 
 悬浮按钮支持：
@@ -92,7 +94,7 @@ cd workbuddy-quick-continue
 swiftc -O -framework CoreGraphics -framework AppKit -o quick_continue src/mac/quick_continue.swift
 ./quick_continue
 
-# macOS（快捷键 + 菜单栏图标）
+# macOS（快捷键 + 悬浮按钮）
 ./quick_continue --button
 ```
 
