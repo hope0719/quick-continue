@@ -13,6 +13,7 @@ import Foundation
 
 let TEXT = "继续"
 let KVK_ANSI_J: UInt32 = 0x26  // J key
+let KVK_ANSI_B: UInt32 = 0x0B  // B key
 
 let useButton = CommandLine.arguments.contains("--button")
 
@@ -73,6 +74,7 @@ class FloatingButton {
     var isDragging = false
     var dragStart: NSPoint = .zero
     var windowStart: NSPoint = .zero
+    var contextMenu: NSMenu!
 
     init() {
         // Create borderless, floating panel
@@ -109,6 +111,20 @@ class FloatingButton {
         button.autoresizingMask = [.width, .height]
         window.contentView!.addSubview(button)
 
+        // Right-click context menu
+        contextMenu = NSMenu(title: "Quick Continue")
+        let hideItem = NSMenuItem(title: "隐藏", action: #selector(onHide), keyEquivalent: "")
+        hideItem.target = self
+        contextMenu.addItem(hideItem)
+        let quitItem = NSMenuItem(title: "退出", action: #selector(onQuit), keyEquivalent: "")
+        quitItem.target = self
+        contextMenu.addItem(quitItem)
+
+        // Add right-click handler
+        let rightClickGesture = NSClickGestureRecognizer(target: self, action: #selector(onRightClick(_:)))
+        rightClickGesture.buttonMask = 0x2  // Right mouse button
+        window.contentView!.addGestureRecognizer(rightClickGesture)
+
         // Position: bottom-right of main screen
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
@@ -126,6 +142,19 @@ class FloatingButton {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             bgView.layer?.backgroundColor = NSColor.systemBlue.cgColor
         }
+    }
+
+    @objc func onRightClick(_ sender: NSClickGestureRecognizer) {
+        let event = sender.location(in: window.contentView)
+        contextMenu.popUp(positioning: nil, at: event, in: window.contentView)
+    }
+
+    @objc func onHide() {
+        window.orderOut(nil)
+    }
+
+    @objc func onQuit() {
+        NSApp.terminate(nil)
     }
 
     func show() {
@@ -151,6 +180,17 @@ var tapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
         logTrigger("⌘+Shift+J")
     }
 
+    // Toggle button visibility with Cmd+Shift+B
+    if keycode == Int64(KVK_ANSI_B) && flags.contains(.maskCommand) && flags.contains(.maskShift) {
+        if let btn = floatingBtn {
+            if btn.window.isVisible {
+                btn.window.orderOut(nil)
+            } else {
+                btn.window.orderFrontRegardless()
+            }
+        }
+    }
+
     return Unmanaged.passRetained(event)
 }
 
@@ -162,6 +202,8 @@ print("================================================")
 print("  Hotkey : ⌘+Shift+J")
 if useButton {
     print("  Button : Floating button (bottom-right)")
+    print("  Toggle : ⌘+Shift+B (show/hide button)")
+    print("  Menu   : Right-click button → 隐藏/退出")
 }
 print("  Text   : '\(TEXT)' + Enter")
 print("------------------------------------------------")
